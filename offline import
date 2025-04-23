@@ -1,0 +1,155 @@
+import sqlite3
+import json
+import os
+import logging
+from sklearn.neighbors import NearestNeighbors
+import numpy as np
+
+# Initialize local database
+def init_db():
+    """Create SQLite database for offline use"""
+    conn = sqlite3.connect('learning_app.db')
+    cursor = conn.cursor()
+    
+    # Create tables - students, content, progress
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS students (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            age INTEGER,
+            email TEXT UNIQUE,
+            password_hash TEXT,
+            prior_knowledge TEXT,
+            goal TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS content (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            level TEXT NOT NULL,
+            description TEXT,
+            file_path TEXT NOT NULL,
+            content_type TEXT DEFAULT 'pdf',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS progress (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER,
+            content_id INTEGER,
+            completion_percentage REAL DEFAULT 0.0,
+            last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            completed BOOLEAN DEFAULT 0,
+            score REAL,
+            notes TEXT,
+            FOREIGN KEY (student_id) REFERENCES students (id),
+            FOREIGN KEY (content_id) REFERENCES content (id)
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+
+# Export/Import functions for offline use
+def export_data(student_id=None):
+    """Export database data for offline use"""
+    conn = sqlite3.connect('learning_app.db')
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    export = {
+        "content": [],
+        "student": None,
+        "progress": []
+    }
+    
+    # Export all content
+    cursor.execute("SELECT * FROM content")
+    for row in cursor:
+        export["content"].append(dict(row))
+        
+    # Export specific student data if requested
+    if student_id:
+        cursor.execute("SELECT * FROM students WHERE id = ?", (student_id,))
+        student = cursor.fetchone()
+        if student:
+            export["student"] = dict(student)
+            
+            # Export student progress
+            cursor.execute(
+                "SELECT * FROM progress WHERE student_id = ?",
+                (student_id,)
+            )
+            for row in cursor:
+                export["progress"].append(dict(row))
+    
+    conn.close()
+    return export
+
+def import_data(data):
+    """Import data from JSON export"""
+    conn = sqlite3.connect('learning_app.db')
+    cursor = conn.cursor()
+    
+    # Import content if database is empty
+    cursor.execute("SELECT COUNT(*) FROM content")
+    if cursor.fetchone()[0] == 0 and data.get("content"):
+        for content in data["content"]:
+            placeholders = ", ".join(["?"] * len(content))
+            columns = ", ".join(content.keys())
+            values = tuple(content.values())
+            query = f"INSERT INTO content ({columns}) VALUES ({placeholders})"
+            cursor.execute(query, values)
+    
+    # Import student data if provided and doesn't exist
+    student = data.get("student")
+    if student and student.get("id"):
+        cursor.execute("SELECT id FROM students WHERE id = ?", (student["id"],))
+        if not cursor.fetchone():
+            placeholders = ", ".join(["?"] * len(student))
+            columns = ", ".join(student.keys())
+            values = tuple(student.values())
+            query = f"INSERT INTO students ({columns}) VALUES ({placeholders})"
+            cursor.execute(query, values)
+    
+    # Import progress data
+    for progress in data.get("progress", []):
+        cursor.execute(
+            "SELECT id FROM progress WHERE student_id = ? AND content_id = ?",
+            (progress["student_id"], progress["content_id"])
+        )
+        if cursor.fetchone():
+            # Update existing record
+            query = """
+                UPDATE progress SET 
+                    completion_percentage = ?,
+                    completed = ?,
+                    score = ?,
+                    notes = ?
+                WHERE student_id = ? AND content_id = ?
+            """
+            cursor.execute(query, (
+                progress["completion_percentage"],
+                progress["completed"],
+                progress.get("score"),
+                progress.get("notes"),
+                progress["student_id"],
+                progress["content_id"]
+            ))
+        else:
+            # Insert new record
+            placeholders = ", ".join(["?"] * len(progress))
+            columns = ", ".join(progress.keys())
+            values = tuple(progress.values())
+            query = f"INSERT INTO progress ({columns}) VALUES ({placeholders})"
+            cursor.execute(query, values)
+    
+    conn.commit()
+    conn.close()
+    return True
