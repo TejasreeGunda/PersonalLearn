@@ -1,0 +1,37 @@
+from app import db
+from datetime import datetime
+
+class Student(db.Model):
+    """Model for student profiles"""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    age = db.Column(db.Integer, nullable=True)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(256), nullable=False)
+    prior_knowledge = db.Column(db.Text, nullable=True)
+    goal = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    progress = db.relationship('Progress', backref='student', lazy=True)
+
+class Content(db.Model):
+    """Model for educational content"""
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(200), nullable=False)
+    topic = db.Column(db.String(100), nullable=False)  # Now this is the programming language
+    level = db.Column(db.String(50), nullable=False)  # Beginner, Intermediate, Advanced
+    description = db.Column(db.Text, nullable=True)
+    file_path = db.Column(db.String(255), nullable=False)
+    content_type = db.Column(db.String(50), default='pdf')  # pdf, video, text
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    progress = db.relationship('Progress', backref='content', lazy=True)
+
+class Progress(db.Model):
+    """Model for tracking student progress"""
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('student.id'), nullable=False)
+    content_id = db.Column(db.Integer, db.ForeignKey('content.id'), nullable=False)
+    completion_percentage = db.Column(db.Float, default=0.0)
+    last_accessed = db.Column(db.DateTime, default=datetime.utcnow)
+    completed = db.Column(db.Boolean, default=False)
+    score = db.Column(db.Float, nullable=True)  # For any assessments
+    notes = db.Column(db.Text, nullable=True)
