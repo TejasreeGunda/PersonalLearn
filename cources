@@ -1,0 +1,192 @@
+import os
+import logging
+from app import db
+from models import Content, Student, Progress
+from sklearn.neighbors import NearestNeighbors
+import numpy as np
+
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(_name_)
+
+def seed_content():
+    """Initialize database with programming content"""
+    contents = [
+        # Python courses
+        {"title": "Python for Beginners", "topic": "Python", "level": "Beginner", 
+         "description": "Learn Python programming from scratch - basics, syntax, and simple applications", 
+         "file_path": "content/python_beginner.pdf"},
+        {"title": "Intermediate Python", "topic": "Python", "level": "Intermediate", 
+         "description": "Advanced concepts in Python including OOP, modules, and packages", 
+         "file_path": "content/python_intermediate.pdf"},
+        {"title": "Python Data Analysis", "topic": "Python", "level": "Advanced", 
+         "description": "Using Python for data analysis with NumPy, Pandas and visualization libraries", 
+         "file_path": "content/python_data_analysis.pdf"},
+        {"title": "Machine Learning with Python", "topic": "Python", "level": "Advanced", 
+         "description": "Implementing machine learning algorithms using Python libraries", 
+         "file_path": "content/ml_python.pdf"},
+        
+        # C & C++ courses
+        {"title": "Introduction to C Programming", "topic": "C", "level": "Beginner", 
+         "description": "Fundamentals of C programming language including syntax and memory management", 
+         "file_path": "content/c_intro.pdf"},
+        {"title": "Advanced C Programming", "topic": "C", "level": "Intermediate", 
+         "description": "Advanced topics in C including pointers, dynamic memory, and data structures", 
+         "file_path": "content/c_advanced.pdf"},
+        {"title": "C++ Fundamentals", "topic": "C++", "level": "Beginner", 
+         "description": "Introduction to C++ programming and object-oriented concepts", 
+         "file_path": "content/cpp_fundamentals.pdf"},
+        {"title": "Advanced C++ and STL", "topic": "C++", "level": "Intermediate", 
+         "description": "Advanced C++ topics including the Standard Template Library and modern C++ features", 
+         "file_path": "content/cpp_advanced.pdf"},
+        {"title": "Game Development with C++", "topic": "C++", "level": "Advanced", 
+         "description": "Building games and graphics applications using C++ and relevant libraries", 
+         "file_path": "content/cpp_gamedev.pdf"},
+        
+        # JavaScript & Web courses
+        {"title": "JavaScript Essentials", "topic": "JavaScript", "level": "Beginner", 
+         "description": "Fundamentals of JavaScript programming for web development", 
+         "file_path": "content/javascript_essentials.pdf"},
+        {"title": "Advanced JavaScript & ES6", "topic": "JavaScript", "level": "Intermediate", 
+         "description": "Modern JavaScript features, async programming, and frameworks", 
+         "file_path": "content/advanced_javascript.pdf"},
+        {"title": "Web Development with HTML & CSS", "topic": "HTML", "level": "Beginner", 
+         "description": "Building responsive websites with HTML5 and CSS3", 
+         "file_path": "content/web_dev_basics.pdf"},
+        {"title": "Advanced HTML5 & CSS3", "topic": "HTML", "level": "Intermediate", 
+         "description": "Modern HTML5 features, CSS animations, and responsive design techniques", 
+         "file_path": "content/html_css_advanced.pdf"},
+        
+        # SQL & Database courses
+        {"title": "SQL Fundamentals", "topic": "SQL", "level": "Beginner", 
+         "description": "Introduction to SQL language and basic database operations", 
+         "file_path": "content/sql_fundamentals.pdf"},
+        {"title": "SQL & Database Design", "topic": "SQL", "level": "Intermediate", 
+         "description": "Relational database concepts and advanced SQL programming", 
+         "file_path": "content/sql_database.pdf"},
+        {"title": "Advanced Database Concepts", "topic": "SQL", "level": "Advanced", 
+         "description": "Performance optimization, transactions, and database administration", 
+         "file_path": "content/database_advanced.pdf"},
+        
+        # Java courses
+        {"title": "Java Programming Fundamentals", "topic": "Java", "level": "Beginner",
+         "description": "Introduction to Java programming language and OOP principles",
+         "file_path": "content/java_fundamentals.pdf"},
+        {"title": "Advanced Java Development", "topic": "Java", "level": "Intermediate",
+         "description": "Advanced Java topics including multithreading, networking, and enterprise features",
+         "file_path": "content/java_advanced.pdf"}
+    ]
+    
+    for c in contents:
+        content = Content(
+            title=c['title'],
+            topic=c['topic'],
+            level=c['level'],
+            description=c['description'],
+            file_path=c['file_path']
+        )
+        db.session.add(content)
+    
+    db.session.commit()
+    logger.info(f"Added {len(contents)} items to content database")
+
+def _encode_level(level):
+    """Convert level string to numeric value"""
+    levels = {"Beginner": 1, "Intermediate": 2, "Advanced": 3}
+    return levels.get(level, 1)
+
+def _encode_topic(topic, all_topics):
+    """Encode topic using one-hot encoding"""
+    index = all_topics.index(topic) if topic in all_topics else -1
+    return index
+
+def recommend_learning_path(student_id, num_recommendations=3):
+    """Recommend content using k-NN algorithm based on student profile"""
+    try:
+        # Get student data
+        student = Student.query.get(student_id)
+        if not student:
+            logger.error(f"Student with ID {student_id} not found")
+            return []
+        
+        # Get content data
+        contents = Content.query.all()
+        if not contents:
+            logger.error("No content available in database")
+            return []
+            
+        # Get already completed content
+        completed_content_ids = [
+            p.content_id for p in Progress.query.filter_by(student_id=student_id, completed=True).all()
+        ]
+        
+        # Filter out content that student has already completed
+        available_content = [c for c in contents if c.id not in completed_content_ids]
+        if not available_content:
+            logger.info(f"Student {student_id} has completed all available content")
+            return []
+        
+        # Extract all unique topics for one-hot encoding
+        all_topics = sorted(list(set(c.topic for c in contents)))
+        
+        # Create feature vectors
+        # For student: prior knowledge topic (one-hot), goal topic (one-hot), current level
+        student_prior = student.prior_knowledge or ""
+        student_goal = student.goal or ""
+        
+        # Find the closest matching topics in our database
+        prior_topic = next((t for t in all_topics if t.lower() in student_prior.lower()), all_topics[0])
+        goal_topic = next((t for t in all_topics if t.lower() in student_goal.lower()), all_topics[0])
+        
+        prior_topic_index = _encode_topic(prior_topic, all_topics)
+        goal_topic_index = _encode_topic(goal_topic, all_topics)
+        
+        # Start with beginner level if we can't determine
+        student_level = 1  
+        
+        # Check progress to determine current level
+        progress_records = Progress.query.filter_by(student_id=student_id, completed=True).all()
+        if progress_records:
+            # Get the average level of completed content
+            completed_content = [Content.query.get(p.content_id) for p in progress_records]
+            levels = [_encode_level(c.level) for c in completed_content if c]
+            if levels:
+                student_level = sum(levels) / len(levels)
+        
+        # Create student vector
+        # The vector includes: topic indices and level
+        student_vec = np.zeros(len(all_topics) + 1)
+        
+        if prior_topic_index >= 0:
+            student_vec[prior_topic_index] = 0.5  # Give some weight to prior knowledge
+        
+        if goal_topic_index >= 0:
+            student_vec[goal_topic_index] = 1.0  # Give more weight to goal
+            
+        student_vec[-1] = student_level
+        
+        # Create content vectors
+        content_vecs = []
+        for content in available_content:
+            vec = np.zeros(len(all_topics) + 1)
+            topic_index = _encode_topic(content.topic, all_topics)
+            if topic_index >= 0:
+                vec[topic_index] = 1.0
+            vec[-1] = _encode_level(content.level)
+            content_vecs.append(vec)
+        
+        # Setup k-NN algorithm
+        n_neighbors = min(num_recommendations, len(available_content))
+        knn = NearestNeighbors(n_neighbors=n_neighbors, metric='euclidean')
+        knn.fit(content_vecs)
+        
+        # Get recommendations
+        distances, indices = knn.kneighbors(student_vec.reshape(1, -1))
+        
+        # Return recommended content
+        recommended = [available_content[i] for i in indices[0]]
+        return recommended
+        
+    except Exception as e:
+        logger.error(f"Error in recommendation algorithm: {str(e)}")
+        return []
